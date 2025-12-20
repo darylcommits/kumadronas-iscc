@@ -55,6 +55,7 @@ const Dashboard = ({ user, session, onProfileUpdate }) => {
   const [showNotifications, setShowNotifications] = useState(false);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(null);
+  const [selectedHospital, setSelectedHospital] = useState('all');
   const [dutyLogs, setDutyLogs] = useState([]);
   const [studentDuties, setStudentDuties] = useState([]);
   const [dashboardStats, setDashboardStats] = useState({});
@@ -394,6 +395,30 @@ const Dashboard = ({ user, session, onProfileUpdate }) => {
       const existingBooking = activeBookings.find(ss => ss.student_id === user.id);
       if (existingBooking) {
         alert('You have already booked this duty.');
+        return;
+      }
+
+      // Check if student already has a booking on this date at any hospital
+      console.log('Checking for existing bookings on this date...');
+      const { data: existingDateBooking, error: dateBookingError } = await supabase
+        .from('schedule_students')
+        .select(`
+          id,
+          schedules!inner(date)
+        `)
+        .eq('student_id', user.id)
+        .eq('status', 'booked')
+        .eq('schedules.date', date)
+        .maybeSingle();
+
+      if (dateBookingError && dateBookingError.code !== 'PGRST116') {
+        console.error('Error checking existing date booking:', dateBookingError);
+        alert('Error checking existing bookings for this date. Please try again.');
+        return;
+      }
+
+      if (existingDateBooking) {
+        alert('You already have a duty scheduled for this date at another hospital. Students can only have one duty per day.');
         return;
       }
 
@@ -834,10 +859,14 @@ const Dashboard = ({ user, session, onProfileUpdate }) => {
     for (let week = 0; week < 6; week++) {
       const weekDays = [];
       for (let day = 0; day < 7; day++) {
-        // Show all schedules for all users so students can see available duties
-        let daySchedule = schedules.find(s =>
-          new Date(s.date).toDateString() === currentDateLoop.toDateString()
-        );
+        // Filter schedules based on selected hospital for students
+        let daySchedule = schedules.find(s => {
+          const matchesDate = new Date(s.date).toDateString() === currentDateLoop.toDateString();
+          const matchesHospital = user?.role === 'student' && selectedHospital !== 'all'
+            ? s.location === selectedHospital
+            : true; // Show all for admins and when "all" is selected
+          return matchesDate && matchesHospital;
+        });
 
         const dayDate = new Date(currentDateLoop);
         dayDate.setHours(0, 0, 0, 0); // Reset time for accurate comparison
@@ -1219,7 +1248,7 @@ const Dashboard = ({ user, session, onProfileUpdate }) => {
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-gray-900">Duty Schedule Calendar</h2>
         {user?.role === 'admin' && (
-          <button 
+          <button
             onClick={() => setActiveTab('schedule-management')}
             className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg transition-colors flex items-center space-x-2"
           >
@@ -1231,6 +1260,33 @@ const Dashboard = ({ user, session, onProfileUpdate }) => {
 
       {/* Calendar Navigation */}
       <div className="card">
+        {/* Hospital Filter for Students */}
+        {user?.role === 'student' && (
+          <div className="flex items-center justify-between mb-4 p-4 bg-gray-50 rounded-lg">
+            <div className="flex items-center space-x-4">
+              <label className="text-sm font-medium text-gray-700">Filter by Hospital:</label>
+              <select
+                value={selectedHospital}
+                onChange={(e) => setSelectedHospital(e.target.value)}
+                className="input-field max-w-xs"
+              >
+                <option value="all">All Hospitals</option>
+                <option value="ISDH - Magsingal">ISDH - Magsingal</option>
+                <option value="ISDH - Sinait">ISDH - Sinait</option>
+                <option value="ISDH - Narvacan">ISDH - Narvacan</option>
+                <option value="ISPH - Gab. Silang">ISPH - Gab. Silang</option>
+                <option value="RHU - Sto. Domingo">RHU - Sto. Domingo</option>
+                <option value="RHU - Santa">RHU - Santa</option>
+                <option value="RHU - San Ildefonso">RHU - San Ildefonso</option>
+                <option value="RHU - Bantay">RHU - Bantay</option>
+              </select>
+            </div>
+            <div className="text-xs text-gray-600">
+              Choose a hospital to view only its schedules
+            </div>
+          </div>
+        )}
+
         <div className="flex justify-between items-center mb-6">
           <button
             onClick={() => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1))}
@@ -1238,11 +1294,16 @@ const Dashboard = ({ user, session, onProfileUpdate }) => {
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
-          
+
           <h3 className="text-xl font-semibold">
             {currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+            {user?.role === 'student' && selectedHospital !== 'all' && (
+              <span className="block text-sm text-emerald-600 font-normal mt-1">
+                Showing schedules for: {selectedHospital}
+              </span>
+            )}
           </h3>
-          
+
           <button
             onClick={() => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1))}
             className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
