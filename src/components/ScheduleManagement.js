@@ -213,7 +213,10 @@ const ScheduleManagement = () => {
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error('Error creating schedule:', error);
+        throw error;
+      }
 
       await fetchSchedules();
       setShowAddModal(false);
