@@ -495,10 +495,6 @@ const StudentManagement = () => {
           <p className="text-gray-600">Manage midwifery students and their accounts</p>
         </div>
         <div className="flex space-x-2">
-          <button className="btn-secondary flex items-center space-x-2">
-            <Upload className="w-4 h-4" />
-            <span>Import</span>
-          </button>
           <div className="relative group">
             <button className="btn-secondary flex items-center space-x-2">
               <Download className="w-4 h-4" />
