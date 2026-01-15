@@ -1,14 +1,11 @@
 import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { 
-  User, 
-  Mail, 
-  Lock, 
-  UserPlus, 
-  LogIn, 
-  AlertCircle, 
-  Eye, 
-  EyeOff, 
+import {
+  UserPlus,
+  LogIn,
+  AlertCircle,
+  Eye,
+  EyeOff,
   Shield,
   GraduationCap,
   Users,
@@ -41,45 +38,109 @@ const AuthForm = () => {
     setSuccess('');
   };
 
-  const validateForm = () => {
+  // Cache for student ID validation to prevent excessive database calls
+  const studentIdCache = new Map();
+
+  const validateStudentId = async (studentId) => {
+    const trimmedId = studentId.trim();
+
+    // Check cache first (case-insensitive)
+    const cacheKey = trimmedId.toLowerCase();
+    if (studentIdCache.has(cacheKey)) {
+      return studentIdCache.get(cacheKey);
+    }
+
+    try {
+      console.log('Validating student ID:', trimmedId);
+
+      // Use case-insensitive search by converting both to lowercase
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, full_name, email, student_number')
+        .eq('role', 'student')
+        .ilike('student_number', trimmedId);
+
+      let result;
+      if (error) {
+        console.error('Error validating student ID:', error);
+        result = { isValid: false, message: 'Unable to verify student ID. Please try again.' };
+      } else if (!data || data.length === 0) {
+        console.log('No student found with ID:', trimmedId);
+        result = { isValid: false, message: `Student ID "${trimmedId}" not found. Please check the ID and try again.` };
+      } else if (data.length > 1) {
+        console.warn('Multiple students found with same ID:', data);
+        result = { isValid: false, message: 'Multiple students found with this ID. Please contact support.' };
+      } else {
+        console.log('Student found:', data[0].full_name, 'with ID:', data[0].student_number);
+        result = { isValid: true, student: data[0] };
+      }
+
+      // Cache the result for 5 minutes using lowercase key
+      studentIdCache.set(cacheKey, result);
+      setTimeout(() => studentIdCache.delete(cacheKey), 5 * 60 * 1000);
+
+      return result;
+    } catch (error) {
+      console.error('Student ID validation error:', error);
+      const result = { isValid: false, message: 'Unable to verify student ID. Please try again.' };
+      studentIdCache.set(cacheKey, result);
+      return result;
+    }
+  };
+
+  const validateForm = async () => {
     if (!formData.email || !formData.password) {
       setError('Email and password are required');
-      return false;
+      return { isValid: false };
     }
 
     if (!formData.email.includes('@')) {
       setError('Please enter a valid email address');
-      return false;
+      return { isValid: false };
     }
 
     if (!isLogin) {
       if (!formData.fullName.trim()) {
         setError('Full name is required');
-        return false;
+        return { isValid: false };
       }
 
       if (formData.role === 'parent' && !formData.studentId.trim()) {
         setError('Student ID is required for parent accounts');
-        return false;
+        return { isValid: false };
       }
 
       if (formData.role === 'student' && !formData.studentNumber.trim()) {
         setError('Student number is required');
-        return false;
+        return { isValid: false };
       }
 
       if (formData.password.length < 6) {
         setError('Password must be at least 6 characters');
-        return false;
+        return { isValid: false };
+      }
+
+      // Validate student ID for parent accounts - return validation result to reuse
+      if (formData.role === 'parent' && formData.studentId.trim()) {
+        const validation = await validateStudentId(formData.studentId);
+        if (!validation.isValid) {
+          setError(validation.message);
+          return { isValid: false };
+        }
+        // Return the validation result so we can reuse it in handleSubmit
+        return { isValid: true, studentValidation: validation };
       }
     }
 
-    return true;
+    return { isValid: true };
   };
 
   const handleSubmit = async () => {
-    
-    if (!validateForm()) return;
+    const validationResult = await validateForm();
+    if (!validationResult.isValid) return;
+
+    // Prevent multiple rapid submissions
+    if (loading) return;
 
     setLoading(true);
     setError('');
@@ -118,7 +179,15 @@ const AuthForm = () => {
       } else {
         // Register
         console.log('Attempting registration for:', formData.email);
-        
+
+        let studentUserId = null;
+
+        // For parent accounts, reuse the validation result from validateForm
+        // to avoid calling validateStudentId twice
+        if (formData.role === 'parent' && validationResult.studentValidation) {
+          studentUserId = validationResult.studentValidation.student.id;
+        }
+
         // Prepare user metadata
         const userData = {
           full_name: formData.fullName.trim(),
@@ -126,7 +195,7 @@ const AuthForm = () => {
           phone_number: formData.phoneNumber.trim() || null,
           student_number: formData.role === 'student' ? formData.studentNumber.trim() : null,
           year_level: formData.role === 'student' ? formData.yearLevel : null,
-          student_id: formData.role === 'parent' ? formData.studentId.trim() : null
+          student_id: formData.role === 'parent' ? studentUserId : null
         };
 
         console.log('User metadata for registration:', userData);
@@ -146,11 +215,12 @@ const AuthForm = () => {
 
         if (data.user) {
           console.log('Registration successful for:', data.user.email);
-          
+
           // The profile should be created automatically by the database trigger
-          // But let's also manually create it as a fallback
+          // But let's also manually create/update it as a fallback
           try {
-            await supabase.from('profiles').insert({
+            // Try to create the profile first
+            const { error: insertError } = await supabase.from('profiles').insert({
               id: data.user.id,
               email: formData.email.trim(),
               full_name: formData.fullName.trim(),
@@ -158,22 +228,47 @@ const AuthForm = () => {
               phone_number: formData.phoneNumber.trim() || null,
               student_number: formData.role === 'student' ? formData.studentNumber.trim() : null,
               year_level: formData.role === 'student' ? formData.yearLevel : null,
-              student_id: formData.role === 'parent' ? formData.studentId.trim() : null,
+              student_id: formData.role === 'parent' ? studentUserId : null,
               is_active: true
             });
-            console.log('Profile created manually as fallback');
+
+            if (insertError) {
+              // If insert failed (likely because profile already exists), try to update it
+              console.log('Profile insert failed, trying update:', insertError.message);
+              const { error: updateError } = await supabase
+                .from('profiles')
+                .update({
+                  email: formData.email.trim(),
+                  full_name: formData.fullName.trim(),
+                  role: formData.role,
+                  phone_number: formData.phoneNumber.trim() || null,
+                  student_number: formData.role === 'student' ? formData.studentNumber.trim() : null,
+                  year_level: formData.role === 'student' ? formData.yearLevel : null,
+                  student_id: formData.role === 'parent' ? studentUserId : null,
+                  is_active: true
+                })
+                .eq('id', data.user.id);
+
+              if (updateError) {
+                console.log('Profile update also failed:', updateError.message);
+              } else {
+                console.log('Profile updated successfully as fallback');
+              }
+            } else {
+              console.log('Profile created manually as fallback');
+            }
           } catch (profileError) {
-            console.log('Manual profile creation failed (may already exist):', profileError.message);
+            console.log('Profile creation/update failed:', profileError.message);
           }
 
           // Create welcome notification
           try {
             await supabase.from('notifications').insert({
               user_id: data.user.id,
-              title: 'Welcome to Comadronas System!',
+              title: 'Welcome to Kumadronas System!',
               message: `Welcome ${formData.fullName}! Your account has been created successfully. ${
-                formData.role === 'student' 
-                  ? 'You can now book your duty schedules.' 
+                formData.role === 'student'
+                  ? 'You can now book your duty schedules.'
                   : formData.role === 'admin'
                   ? 'You have full system access for managing schedules.'
                   : 'You can now view your child\'s duty history.'
@@ -196,7 +291,7 @@ const AuthForm = () => {
       
       // Provide more user-friendly error messages
       let errorMessage = error.message;
-      
+
       if (error.message.includes('Invalid login credentials')) {
         errorMessage = 'Invalid email or password. Please check your credentials and try again.';
       } else if (error.message.includes('Email not confirmed')) {
@@ -205,26 +300,14 @@ const AuthForm = () => {
         errorMessage = 'An account with this email already exists. Please try logging in instead.';
       } else if (error.message.includes('Password should be at least 6 characters')) {
         errorMessage = 'Password must be at least 6 characters long.';
+      } else if (error.message.includes('rate limit exceeded') || error.status === 429) {
+        errorMessage = 'Too many signup attempts. Please wait a few minutes before trying again. If you already have an account, try logging in instead.';
       }
-      
+
       setError(errorMessage);
     } finally {
       setLoading(false);
     }
-  };
-
-  const fillDemoCredentials = (role) => {
-    const credentials = {
-      admin: { email: 'admin@iscc.edu', password: 'admin123' },
-      student: { email: 'student@iscc.edu', password: 'student123' },
-      parent: { email: 'parent@iscc.edu', password: 'parent123' }
-    };
-    
-    setFormData({
-      ...formData,
-      email: credentials[role].email,
-      password: credentials[role].password
-    });
   };
 
   return (
@@ -362,7 +445,6 @@ const AuthForm = () => {
                   <div className="grid grid-cols-2 gap-2">
                     {[
                       { value: 'student', label: 'Student', icon: GraduationCap },
-                    
                       { value: 'parent', label: 'Parent', icon: Users }
                     ].map(({ value, label, icon: Icon }) => (
                       <button
@@ -394,7 +476,7 @@ const AuthForm = () => {
                         value={formData.studentNumber}
                         onChange={handleChange}
                         className="input-field"
-                        placeholder="2024-12345"
+                        placeholder="C-23-12345"
                         required
                       />
                     </div>
@@ -429,9 +511,12 @@ const AuthForm = () => {
                       value={formData.studentId}
                       onChange={handleChange}
                       className="input-field"
-                      placeholder="Enter your child's student ID"
+                      placeholder="C-23-12345"
                       required
                     />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Enter your child's student number (e.g., C-23-19038)
+                    </p>
                   </div>
                 )}
 
@@ -454,9 +539,11 @@ const AuthForm = () => {
 
             {/* Error/Success Messages */}
             {error && (
-              <div className="flex items-center space-x-2 text-red-600 bg-red-50 p-4 rounded-lg border border-red-200">
-                <AlertCircle className="w-5 h-5 flex-shrink-0" />
-                <span className="text-sm">{error}</span>
+              <div className="flex items-start space-x-2 text-red-600 bg-red-50 p-4 rounded-lg border border-red-200">
+                <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                <div className="text-sm">
+                  <div className="whitespace-pre-line">{error}</div>
+                </div>
               </div>
             )}
 
@@ -483,9 +570,6 @@ const AuthForm = () => {
               )}
             </button>
           </div>
-
-          
-          
 
           {/* Footer Links */}
           <div className="mt-6 text-center">
