@@ -58,6 +58,7 @@ const Dashboard = ({ user, session, onProfileUpdate }) => {
   const [selectedHospital, setSelectedHospital] = useState('all');
   const [dutyLogs, setDutyLogs] = useState([]);
   const [studentDuties, setStudentDuties] = useState([]);
+  const [childDuties, setChildDuties] = useState([]);
   const [dashboardStats, setDashboardStats] = useState({});
   const [pendingBookings, setPendingBookings] = useState([]);
   const [initialized, setInitialized] = useState(false);
@@ -138,7 +139,8 @@ const Dashboard = ({ user, session, onProfileUpdate }) => {
       fetchDashboardStats(),
       fetchPendingBookings(),
       user?.role === 'admin' && fetchDutyLogs(),
-      user?.role === 'student' && fetchStudentDuties()
+      user?.role === 'student' && fetchStudentDuties(),
+      user?.role === 'parent' && fetchChildDuties()
     ]).finally(() => {
       setInitialized(true);
     });
@@ -323,6 +325,17 @@ const Dashboard = ({ user, session, onProfileUpdate }) => {
       setStudentDuties(data || []);
     } catch (error) {
       console.error('Error fetching student duties:', error);
+    }
+  };
+
+  const fetchChildDuties = async () => {
+    try {
+      console.log('Fetching child duties for parent:', user.id);
+      const data = await dbHelpers.getChildDuties(user.id);
+      console.log('Child duties fetched:', data);
+      setChildDuties(data || []);
+    } catch (error) {
+      console.error('Error fetching child duties:', error);
     }
   };
 
@@ -1459,7 +1472,7 @@ const Dashboard = ({ user, session, onProfileUpdate }) => {
                         ) : (
                           // Parent: Only show if their child is assigned
                           activeStudents
-                            .filter(assignment => assignment.student_id === user.id) // Assuming parent has child's user ID
+                            .filter(assignment => assignment.student_id === user.student_id)
                             .map((assignment, idx) => (
                               <div
                                 key={idx}
@@ -1879,11 +1892,114 @@ const Dashboard = ({ user, session, onProfileUpdate }) => {
       case 'help':
         return <HelpSupport user={user} />;
       case 'child-duties':
-        return <div className="text-center py-12">
-          <Eye className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-          <h3 className="text-lg font-medium text-gray-900 mb-2">Child's Duty History</h3>
-          <p className="text-gray-600">View your child's duty assignments and completion status.</p>
-        </div>;
+        return (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className="text-3xl font-bold text-gray-900">Child's Duty History</h2>
+              <div className="text-sm text-gray-600">
+                Monitoring your child's clinical duty assignments
+              </div>
+            </div>
+
+            <div className="grid gap-4">
+              {childDuties.map((duty) => (
+                <div key={duty.id} className="card hover:shadow-lg transition-shadow">
+                  <div className="flex justify-between items-start">
+                    <div className="flex-1">
+                      <div className="flex items-center space-x-3 mb-3">
+                        <CalendarIcon className="w-5 h-5 text-emerald-600" />
+                        <span className="font-semibold text-lg">
+                          {new Date(duty.schedules.date).toLocaleDateString('en-US', {
+                            weekday: 'long',
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric'
+                          })}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
+                        <div>
+                          <p className="text-gray-600">Booked:</p>
+                          <p className="font-medium">{new Date(duty.booking_time).toLocaleString()}</p>
+                        </div>
+                        <div>
+                          <p className="text-gray-600">Location:</p>
+                          <p className="font-medium">{duty.schedules.location || 'N/A'}</p>
+                        </div>
+                        <div>
+                          <p className="text-gray-600">Shift:</p>
+                          <p className="font-medium">{duty.schedules.shift_start} - {duty.schedules.shift_end}</p>
+                        </div>
+                        <div>
+                          <p className="text-gray-600">Status:</p>
+                          <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${
+                            duty.status === 'completed' ? 'bg-blue-100 text-blue-800' :
+                            duty.status === 'cancelled' ? 'bg-red-100 text-red-800' :
+                            duty.schedules.status === 'approved' ? 'bg-green-100 text-green-800' :
+                            'bg-yellow-100 text-yellow-800'
+                          }`}>
+                            {duty.status === 'completed' ? 'Completed' :
+                             duty.status === 'cancelled' ? 'Cancelled' :
+                             duty.schedules.status === 'approved' ? 'Approved' :
+                             'Pending Approval'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {duty.schedules.description && (
+                        <div className="mt-3 p-3 bg-gray-50 rounded-lg">
+                          <p className="text-sm text-gray-600 mb-1">Schedule Description:</p>
+                          <p className="text-sm font-medium text-gray-900">{duty.schedules.description}</p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex flex-col items-end space-y-2 ml-4">
+                      {duty.status === 'completed' && (
+                        <div className="text-xs text-green-600 px-3 py-1 bg-green-50 rounded-lg border border-green-200">
+                          ✓ Duty Completed Successfully
+                        </div>
+                      )}
+
+                      {duty.status === 'cancelled' && (
+                        <div className="text-xs text-red-600 px-3 py-1 bg-red-50 rounded-lg border border-red-200">
+                          ✗ Duty Cancelled
+                        </div>
+                      )}
+
+                      {duty.status === 'booked' && duty.schedules.status === 'approved' && (
+                        <div className="text-xs text-emerald-600 px-3 py-1 bg-emerald-50 rounded-lg border border-emerald-200">
+                          ✅ Schedule Approved - Active Duty
+                        </div>
+                      )}
+
+                      {duty.status === 'booked' && duty.schedules.status === 'pending' && (
+                        <div className="text-xs text-yellow-600 px-3 py-1 bg-yellow-50 rounded-lg border border-yellow-200">
+                          ⏳ Waiting for Admin Approval
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {childDuties.length === 0 && (
+                <div className="text-center py-12">
+                  <Eye className="w-16 h-16 mx-auto mb-4 text-gray-300" />
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">No Duty History Yet</h3>
+                  <p className="text-gray-600 mb-4">Your child hasn't been assigned any duties yet. Duty assignments will appear here once they start booking their clinical schedules.</p>
+                  <button
+                    onClick={() => setActiveTab('schedule')}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg transition-colors"
+                  >
+                    View Schedule Calendar
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
       default:
         return renderDashboardView();
     }
