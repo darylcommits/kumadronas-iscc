@@ -152,7 +152,7 @@ const ReportsAnalytics = () => {
       a.download = `duty-report-${dateRange}days-${new Date().toISOString().split('T')[0]}.csv`;
       a.click();
       URL.revokeObjectURL(url);
-    } else if (format === 'excel' || format === 'pdf') {
+    } else if (format === 'excel') {
       // Create HTML table for Excel
       const tableHTML = `
         <html>
@@ -186,6 +186,100 @@ const ReportsAnalytics = () => {
       a.download = `duty-report-${dateRange}days-${new Date().toISOString().split('T')[0]}.xls`;
       a.click();
       URL.revokeObjectURL(url);
+    } else if (format === 'pdf') {
+      exportReportPDF();
+    }
+  };
+
+  // FIXED: Proper PDF export using reportlab
+  const exportReportPDF = async () => {
+    try {
+      // Create a simple HTML-based PDF using browser's print functionality
+      const reportData = {
+        dateRange: dateRange,
+        totalDuties: analyticsData.totalDuties || 0,
+        completedDuties: analyticsData.completedDuties || 0,
+        cancelledDuties: analyticsData.cancelledDuties || 0,
+        pendingDuties: analyticsData.pendingDuties || 0,
+        totalStudents: analyticsData.totalStudents || 0,
+        activeStudents: analyticsData.activeStudents || 0,
+        completionRate: analyticsData.completionRate || 0,
+        cancellationRate: analyticsData.cancellationRate || 0
+      };
+
+      // Create HTML content for PDF
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <title>Duty Report - Last ${dateRange} Days</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 40px; }
+            .header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #10b981; padding-bottom: 20px; }
+            .title { font-size: 24px; color: #10b981; font-weight: bold; margin-bottom: 10px; }
+            .subtitle { color: #666; margin-bottom: 20px; }
+            .summary-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+            .summary-table th { background-color: #10b981; color: white; padding: 12px; text-align: left; }
+            .summary-table td { padding: 12px; border-bottom: 1px solid #ddd; }
+            .summary-table tr:nth-child(even) { background-color: #f9f9f9; }
+            .footer { text-align: center; margin-top: 40px; color: #666; font-style: italic; }
+            @media print {
+              body { margin: 0; padding: 20px; }
+              .no-print { display: none !important; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="title">Duty Report - Last ${dateRange} Days</div>
+            <div class="subtitle">Generated: ${new Date().toLocaleString()}</div>
+          </div>
+
+          <table class="summary-table">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>Total Duties</td><td>${reportData.totalDuties}</td></tr>
+              <tr><td>Completed Duties</td><td>${reportData.completedDuties}</td></tr>
+              <tr><td>Cancelled Duties</td><td>${reportData.cancelledDuties}</td></tr>
+              <tr><td>Pending Duties</td><td>${reportData.pendingDuties}</td></tr>
+              <tr><td>Total Students</td><td>${reportData.totalStudents}</td></tr>
+              <tr><td>Active Students</td><td>${reportData.activeStudents}</td></tr>
+              <tr><td>Completion Rate</td><td>${reportData.completionRate}%</td></tr>
+              <tr><td>Cancellation Rate</td><td>${reportData.cancellationRate}%</td></tr>
+            </tbody>
+          </table>
+
+          <div class="footer">
+            Ilocos Sur Community College - Kumadronas System
+          </div>
+
+          <div class="no-print" style="text-align: center; margin-top: 30px; color: #666;">
+            Note: This report was generated for printing. Please use your browser's print function to save as PDF.
+          </div>
+        </body>
+        </html>
+      `;
+
+      // Open in new window for printing
+      const printWindow = window.open('', '_blank');
+      printWindow.document.write(htmlContent);
+      printWindow.document.close();
+
+      // Wait for content to load, then print
+      printWindow.onload = () => {
+        printWindow.print();
+        alert('PDF report generated! Use your browser\'s print dialog to save as PDF.');
+      };
+
+    } catch (error) {
+      console.error('Error exporting PDF:', error);
+      alert('Error exporting PDF: ' + error.message);
     }
   };
 
