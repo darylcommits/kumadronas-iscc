@@ -1,4 +1,4 @@
-// StudentManagement.js - Admin page for managing students
+// StudentManagement.js - FIXED VERSION with explicit relationship specification
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { 
@@ -18,7 +18,9 @@ import {
   Upload,
   Shield,
   Eye,
-  EyeOff
+  EyeOff,
+  Save,
+  X as CloseIcon
 } from 'lucide-react';
 
 const StudentManagement = () => {
@@ -30,38 +32,66 @@ const StudentManagement = () => {
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showCoAdminModal, setShowCoAdminModal] = useState(false);
+  const [editFormData, setEditFormData] = useState({});
 
   useEffect(() => {
     fetchStudents();
   }, []);
 
+  // FIXED: Explicit relationship specification to avoid ambiguity
   const fetchStudents = async () => {
     try {
-      const { data, error } = await supabase
+      setLoading(true);
+      console.log('Fetching students from database...');
+      
+      // First, fetch all students
+      const { data: profilesData, error: profilesError } = await supabase
         .from('profiles')
-        .select(`
-          *,
-          schedule_students(
-            id,
-            status,
-            schedules(date, status)
-          )
-        `)
+        .select('*')
         .eq('role', 'student')
         .order('full_name');
 
-      if (error) throw error;
-      setStudents(data || []);
+      if (profilesError) {
+        console.error('Error fetching profiles:', profilesError);
+        throw profilesError;
+      }
+
+      // Then, fetch their schedule_students data separately
+      const { data: scheduleData, error: scheduleError } = await supabase
+        .from('schedule_students')
+        .select(`
+          id,
+          student_id,
+          status,
+          schedules(date, status)
+        `)
+        .in('student_id', profilesData.map(p => p.id));
+
+      if (scheduleError) {
+        console.error('Error fetching schedule_students:', scheduleError);
+        // Don't throw - just log and continue with empty schedule data
+        console.warn('Continuing without schedule data');
+      }
+
+      // Merge the data
+      const studentsWithSchedules = profilesData.map(profile => ({
+        ...profile,
+        schedule_students: scheduleData?.filter(s => s.student_id === profile.id) || []
+      }));
+
+      console.log('Students fetched successfully:', studentsWithSchedules);
+      setStudents(studentsWithSchedules);
     } catch (error) {
-      console.error('Error fetching students:', error);
+      console.error('Error in fetchStudents:', error);
+      alert('Error loading students: ' + error.message);
     } finally {
       setLoading(false);
     }
   };
 
   const filteredStudents = students.filter(student => {
-    const matchesSearch = student.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         student.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    const matchesSearch = student.full_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         student.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          student.student_number?.toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchesFilter = filterStatus === 'all' || 
@@ -82,6 +112,7 @@ const StudentManagement = () => {
       await fetchStudents();
     } catch (error) {
       console.error('Error updating student status:', error);
+      alert('Error updating status: ' + error.message);
     }
   };
 
@@ -124,7 +155,6 @@ const StudentManagement = () => {
       a.click();
       URL.revokeObjectURL(url);
     } else if (format === 'excel') {
-      // Create HTML table for Excel
       const headers = Object.keys(exportData[0] || {});
       const tableHTML = `
         <table>
@@ -153,7 +183,6 @@ const StudentManagement = () => {
     }
 
     try {
-      // First, cancel all active duties for this student
       const { error: cancelError } = await supabase
         .from('schedule_students')
         .update({ 
@@ -166,7 +195,6 @@ const StudentManagement = () => {
 
       if (cancelError) throw cancelError;
 
-      // Then delete the student profile
       const { error } = await supabase
         .from('profiles')
         .delete()
@@ -183,9 +211,47 @@ const StudentManagement = () => {
     }
   };
 
+  const handleEditStudent = (student) => {
+    setSelectedStudent(student);
+    setEditFormData({
+      full_name: student.full_name || '',
+      email: student.email || '',
+      student_number: student.student_number || '',
+      year_level: student.year_level || '',
+      phone_number: student.phone_number || ''
+    });
+    setShowEditModal(true);
+  };
+
+  const handleSaveEdit = async (e) => {
+    e.preventDefault();
+    
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          full_name: editFormData.full_name,
+          student_number: editFormData.student_number,
+          year_level: editFormData.year_level,
+          phone_number: editFormData.phone_number,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', selectedStudent.id);
+
+      if (error) throw error;
+
+      await fetchStudents();
+      setShowEditModal(false);
+      setSelectedStudent(null);
+      alert('Student information updated successfully!');
+    } catch (error) {
+      console.error('Error updating student:', error);
+      alert('Error updating student: ' + error.message);
+    }
+  };
+
   const handleCreateCoAdmin = async (coAdminData) => {
     try {
-      // Create auth user first
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: coAdminData.email,
         password: coAdminData.password,
@@ -199,7 +265,6 @@ const StudentManagement = () => {
 
       if (authError) throw authError;
 
-      // Create profile
       const { error: profileError } = await supabase
         .from('profiles')
         .insert({
@@ -255,7 +320,7 @@ const StudentManagement = () => {
           </select>
           <input
             type="tel"
-            placeholder="Phone Number *"
+            placeholder="Phone Number"
             className="input-field"
             required
           />
@@ -266,6 +331,106 @@ const StudentManagement = () => {
             <button 
               type="button"
               onClick={() => setShowAddModal(false)}
+              className="btn-secondary flex-1"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+
+  const EditStudentModal = () => (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-lg font-semibold">Edit Student Information</h3>
+          <button
+            onClick={() => {
+              setShowEditModal(false);
+              setSelectedStudent(null);
+            }}
+            className="text-gray-400 hover:text-gray-600"
+          >
+            <CloseIcon className="w-5 h-5" />
+          </button>
+        </div>
+        <form onSubmit={handleSaveEdit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+            <input
+              type="text"
+              value={editFormData.full_name}
+              onChange={(e) => setEditFormData({...editFormData, full_name: e.target.value})}
+              className="input-field"
+              required
+            />
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Email (Read-only)</label>
+            <input
+              type="email"
+              value={editFormData.email}
+              className="input-field bg-gray-100 cursor-not-allowed"
+              readOnly
+              disabled
+            />
+            <p className="text-xs text-gray-500 mt-1">Email cannot be changed</p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Student Number</label>
+            <input
+              type="text"
+              value={editFormData.student_number}
+              onChange={(e) => setEditFormData({...editFormData, student_number: e.target.value})}
+              className="input-field"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Year Level</label>
+            <select 
+              value={editFormData.year_level}
+              onChange={(e) => setEditFormData({...editFormData, year_level: e.target.value})}
+              className="input-field" 
+              required
+            >
+              <option value="">Select Year Level</option>
+              <option value="1st Year">1st Year</option>
+              <option value="2nd Year">2nd Year</option>
+              <option value="3rd Year">3rd Year</option>
+              <option value="4th Year">4th Year</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
+            <input
+              type="tel"
+              value={editFormData.phone_number}
+              onChange={(e) => setEditFormData({...editFormData, phone_number: e.target.value})}
+              className="input-field"
+            />
+          </div>
+
+          <div className="flex space-x-3 pt-4">
+            <button 
+              type="submit" 
+              className="btn-primary flex-1 flex items-center justify-center space-x-2"
+            >
+              <Save className="w-4 h-4" />
+              <span>Save Changes</span>
+            </button>
+            <button 
+              type="button"
+              onClick={() => {
+                setShowEditModal(false);
+                setSelectedStudent(null);
+              }}
               className="btn-secondary flex-1"
             >
               Cancel
@@ -322,7 +487,7 @@ const StudentManagement = () => {
             />
             <input
               type="tel"
-              placeholder="Phone Number *"
+              placeholder="Phone Number"
               value={coAdminData.phone_number}
               onChange={(e) => setCoAdminData({...coAdminData, phone_number: e.target.value})}
               className="input-field"
@@ -390,7 +555,7 @@ const StudentManagement = () => {
           <div className="flex items-start space-x-4">
             <div className="w-12 h-12 bg-gradient-to-r from-emerald-500 to-green-500 rounded-full flex items-center justify-center">
               <span className="text-white font-medium">
-                {student.full_name.split(' ').map(n => n[0]).join('').substring(0, 2)}
+                {student.full_name?.split(' ').map(n => n[0]).join('').substring(0, 2)}
               </span>
             </div>
             
@@ -442,11 +607,9 @@ const StudentManagement = () => {
 
           <div className="flex items-center space-x-2">
             <button
-              onClick={() => {
-                setSelectedStudent(student);
-                setShowEditModal(true);
-              }}
+              onClick={() => handleEditStudent(student)}
               className="p-2 text-gray-500 hover:text-gray-700 rounded-lg hover:bg-gray-100"
+              title="Edit student information"
             >
               <Edit className="w-4 h-4" />
             </button>
@@ -488,7 +651,6 @@ const StudentManagement = () => {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Student Management</h2>
@@ -538,7 +700,6 @@ const StudentManagement = () => {
         </div>
       </div>
 
-      {/* Filters and Search */}
       <div className="card">
         <div className="flex flex-col sm:flex-row gap-4">
           <div className="flex-1 relative">
@@ -565,7 +726,6 @@ const StudentManagement = () => {
         </div>
       </div>
 
-      {/* Statistics Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="card bg-gradient-to-r from-slate-600 to-slate-700 text-white">
           <div className="flex items-center justify-between">
@@ -605,7 +765,6 @@ const StudentManagement = () => {
         </div>
       </div>
 
-      {/* Students List */}
       <div className="space-y-4">
         {filteredStudents.length > 0 ? (
           filteredStudents.map((student) => (
@@ -628,8 +787,8 @@ const StudentManagement = () => {
         )}
       </div>
 
-      {/* Modals */}
       {showAddModal && <AddStudentModal />}
+      {showEditModal && <EditStudentModal />}
       {showCoAdminModal && <CoAdminModal />}
     </div>
   );
